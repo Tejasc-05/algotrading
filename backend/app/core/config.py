@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     binance_api_key: str | None = None
     binance_secret: str | None = None
 
+    # Sentiment API credentials
+    newsapi_api_key: str | None = None
+    cryptopanic_api_key: str | None = None
+    twitter_api_key: str | None = None
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

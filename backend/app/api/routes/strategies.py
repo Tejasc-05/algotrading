@@ -166,3 +166,64 @@ async def validate_strategy(
         graph = StrategyGraph.model_validate(latest.graph_json)
 
     return validate_strategy_graph(graph)
+
+
+@router.post("/{strategy_id}/execute", response_model=dict)
+async def execute_strategy(
+    strategy_id: str,
+    payload: dict | None = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Execute a strategy against latest market data and return signals."""
+    from app.strategy_engine.executor import StrategyExecutor
+
+    # Get the strategy graph
+    strategy = await _get_owned_strategy(db, strategy_id, current_user.id)
+
+    # Get latest version graph
+    latest = max(strategy.versions, key=lambda v: v.version_number)
+    from app.schemas.strategy import StrategyGraph
+    graph = StrategyGraph.model_validate(latest.graph_json)
+
+    # Create executor and evaluate
+    executor = StrategyExecutor(graph)
+
+    # Fetch latest market data (use Binance)
+    from app.market_data.ccxt_client import get_ccxt_client
+    client = get_ccxt_client("binance")
+    candles_df = await client._exchange.fetch_ohlcv(
+        symbol="BTC/USDT",
+        timeframe="1h",
+        limit=100,
+    )
+
+    import pandas as pd
+    candles_pd = pd.DataFrame(
+        candles_df,
+        columns=["timestamp", "open", "high", "low", "close", "volume"],
+    )
+
+    market_context = {
+        "symbol": "BTC/USDT",
+        "timeframe": "1h",
+        "candles": candles_pd,
+        "current_price": float(candles_df[-1][4]),  # close price
+        "sentiment": None,
+    }
+
+    # Evaluate strategy
+    signals = executor.evaluate(market_context)
+
+    return {
+        "strategy_id": strategy.id,
+        "signals": [
+            {
+                "node_id": s.node_id,
+                "action": s.action,
+                "params": s.params,
+            }
+            for s in signals
+        ],
+        "candle_count": len(candles_df),
+    }
