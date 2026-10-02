@@ -190,25 +190,35 @@ async def execute_strategy(
     executor = StrategyExecutor(graph)
 
     # Fetch latest market data (use Binance)
-    from app.market_data.ccxt_client import get_ccxt_client
-    client = get_ccxt_client("binance")
-    candles_df = await client._exchange.fetch_ohlcv(
+    from app.exchanges.ccxt_service import CCXTExchange
+    client = CCXTExchange(exchange_id="binance", testnet=True)
+    candles = await client.fetch_ohlcv(
         symbol="BTC/USDT",
         timeframe="1h",
+        since=None,
         limit=100,
     )
 
     import pandas as pd
     candles_pd = pd.DataFrame(
-        candles_df,
-        columns=["timestamp", "open", "high", "low", "close", "volume"],
+        [
+            {
+                "timestamp": c.timestamp,
+                "open": c.open,
+                "high": c.high,
+                "low": c.low,
+                "close": c.close,
+                "volume": c.volume,
+            }
+            for c in candles
+        ]
     )
 
     market_context = {
         "symbol": "BTC/USDT",
         "timeframe": "1h",
         "candles": candles_pd,
-        "current_price": float(candles_df[-1][4]),  # close price
+        "current_price": float(candles[-1].close),  # close price
         "sentiment": None,
     }
 
@@ -225,5 +235,5 @@ async def execute_strategy(
             }
             for s in signals
         ],
-        "candle_count": len(candles_df),
+        "candle_count": len(candles),
     }

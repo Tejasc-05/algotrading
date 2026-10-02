@@ -21,6 +21,7 @@ import { Badge } from '@/components/ui/badge'
 import { NodePalette } from '@/features/strategy-builder/NodePalette'
 import { nodeTypes } from '@/features/strategy-builder/nodes/StrategyNodes'
 import { useStrategyStore, type StrategyNodeData } from '@/store/useStrategyStore'
+import { api } from '@/lib/api'
 
 let nodeId = 100
 
@@ -39,6 +40,10 @@ export function StrategyCanvas() {
   } = useStrategyStore()
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([])
   const [testStatus, setTestStatus] = useState('Ready')
+  const [signalOutput, setSignalOutput] = useState<string[]>([])
+  const [isExecuting, setIsExecuting] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
+  const [savedStrategyId, setSavedStrategyId] = useState<string | null>(null)
 
   const onNodesChange = useCallback(
     (changes: NodeChange<Node<StrategyNodeData>>[]) => {
@@ -106,19 +111,83 @@ export function StrategyCanvas() {
     event.dataTransfer.effectAllowed = 'move'
   }
 
-  const handleSave = () => {
-    markSaved()
+  const buildGraphPayload = () => {
+    return {
+      nodes: nodes.map((n) => ({
+        id: n.id,
+        type: n.type,
+        position: n.position,
+        data: n.data,
+      })),
+      edges: edges.map((e) => ({
+        id: e.id,
+        source: e.source,
+        target: e.target,
+        animated: e.animated,
+      })),
+    }
   }
 
-  const handleTestRun = () => {
-    const validNodes = nodes.length
-    const validEdges = edges.length
-    const hasSignals = nodes.some((node) => ['rsi', 'macd', 'sentiment', 'condition'].includes(node.type ?? ''))
-    const status = hasSignals
-      ? `Test passed: ${validNodes} nodes, ${validEdges} connections checked.`
-      : 'Test failed: add at least one signal node.'
+  const handleSave = async () => {
+    setIsSaving(true)
+    try {
+      const graph = buildGraphPayload()
+      const result = await api.strategies.create({
+        name: strategyName,
+        description: '',
+        graph,
+      })
+      setSavedStrategyId(result.id)
+      markSaved()
+      setTestStatus((prev) => `Saved: ${result.name} (v${result.current_version})`)
+    } catch (err: any) {
+      setTestStatus(`Save failed: ${err.message}`)
+    } finally {
+      setIsSaving(false)
+    }
+  }
 
-    setTestStatus(status)
+  const handleTestRun = async () => {
+    setIsExecuting(true)
+    setSignalOutput([])
+    try {
+      let strategyId = savedStrategyId
+
+      // If strategy not yet saved, create it first
+      if (!strategyId) {
+        const graph = buildGraphPayload()
+        const created = await api.strategies.create({
+          name: strategyName,
+          description: '',
+          graph,
+        })
+        strategyId = created.id
+        setSavedStrategyId(strategyId)
+        markSaved()
+      }
+
+      // Execute the strategy
+      const result = await api.strategies.execute(strategyId)
+
+      const signals = result.signals || []
+      if (signals.length === 0) {
+        setTestStatus('No signals generated')
+        setSignalOutput(['No BUY/SELL signals detected'])
+      } else {
+        setTestStatus(`Executed: ${signals.length} signal(s)`)
+        setSignalOutput(
+          signals.map(
+            (s: any) =>
+              `${s.action.toUpperCase()} (${s.node_id}) — ${JSON.stringify(s.params)}`
+          )
+        )
+      }
+    } catch (err: any) {
+      setTestStatus(`Execution failed: ${err.message}`)
+      setSignalOutput([`Error: ${err.message}`])
+    } finally {
+      setIsExecuting(false)
+    }
   }
 
   const handleDeleteSelected = () => {
@@ -157,9 +226,14 @@ export function StrategyCanvas() {
             <Badge variant="secondary">{testStatus}</Badge>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={handleTestRun}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleTestRun}
+              disabled={isExecuting || isSaving}
+            >
               <Play className="h-4 w-4 mr-1" />
-              Test Run
+              {isExecuting ? 'Running...' : 'Test Run'}
             </Button>
             <Button
               variant="destructive"
@@ -170,12 +244,24 @@ export function StrategyCanvas() {
               <Trash2 className="h-4 w-4 mr-1" />
               Delete Selected
             </Button>
-            <Button size="sm" onClick={handleSave}>
+            <Button size="sm" onClick={handleSave} disabled={isSaving}>
               <Save className="h-4 w-4" />
-              Save Strategy
+              {isSaving ? 'Saving...' : 'Save Strategy'}
             </Button>
           </div>
         </div>
+
+        {/* Signal Output Panel */}
+        {signalOutput.length > 0 && (
+          <div className="border-b border-border bg-muted/30 p-3 max-h-32 overflow-y-auto">
+            <div className="text-xs font-medium text-muted-foreground mb-1">Signal Output</div>
+            {signalOutput.map((line, i) => (
+              <div key={i} className="text-xs font-mono text-foreground">
+                {line}
+              </div>
+            ))}
+          </div>
+        )}
 
         <div ref={reactFlowWrapper} className="flex-1">
           <ReactFlow

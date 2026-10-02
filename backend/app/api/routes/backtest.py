@@ -24,8 +24,8 @@ router = APIRouter(prefix="/backtest", tags=["backtest"])
 @router.post("", response_model=BacktestResultOut, status_code=status.HTTP_202_ACCEPTED)
 async def run_backtest(
     payload: BacktestRequest,
-    current_user: "User",
-    db: AsyncSession,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ) -> BacktestResultOut:
     """Run a backtest for a strategy against historical data."""
     from app.database.repositories.strategy_repository import StrategyRepository

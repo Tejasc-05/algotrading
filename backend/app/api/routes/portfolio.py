@@ -1,7 +1,8 @@
 """Portfolio aggregation endpoints. Real implementation (Phase 7+) returns
 user-level aggregated balances and P/L across all active paper accounts."""
+from __future__ import annotations
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Depends
 
