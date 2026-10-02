@@ -5,14 +5,14 @@ developer helper to materialize fills deterministically. The full production
 engine (background processing, realtime events, advanced matching) is
 implemented in later phases.
 """
-from datetime import datetime
-
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, status, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import joinedload
 
 from app.api.dependencies import get_current_user, get_db
 from app.database.models.user import User
@@ -32,6 +32,8 @@ async def start_paper_trading(
         user_id=current_user.id,
         strategy_id=payload.strategy_id,
         name=f"Paper Account {payload.strategy_id}",
+        symbol=payload.symbol,
+        timeframe=payload.timeframe,
         starting_balance=payload.starting_balance,
         balance=payload.starting_balance,
     )
@@ -136,16 +138,30 @@ async def simulate_fill_endpoint(
     }
 
 
-@router.get("/account", response_model=PaperAccountOut)
-async def get_paper_account(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)) -> PaperAccountOut:
-    res = await db.execute(select(PaperAccount).where(PaperAccount.user_id == current_user.id, PaperAccount.is_active == True))
+class PaperTradingStopRequest(BaseModel):
+    paper_account_id: Optional[str] = None
+
+
+@router.post("/stop", response_model=PaperAccountOut)
+async def stop_paper_trading(
+    payload: Optional[PaperTradingStopRequest] = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> PaperAccountOut:
+    stmt = select(PaperAccount).where(PaperAccount.user_id == current_user.id, PaperAccount.is_active == True)
+    if payload and payload.paper_account_id:
+        stmt = stmt.where(PaperAccount.id == payload.paper_account_id)
+    res = await db.execute(stmt)
     account = res.scalars().first()
     if not account:
-        raise HTTPException(status_code=404, detail="No active paper account")
+        raise HTTPException(status_code=404, detail="No active paper account found")
 
-    # Simplified totals for MVP
-    total_pnl = 0.0
-    total_pnl_percent = 0.0
+    account.is_active = False
+    await db.commit()
+    await db.refresh(account)
+
+    pnl = float(account.balance) - float(account.starting_balance)
+    pnl_percent = (pnl / float(account.starting_balance) * 100) if float(account.starting_balance) else 0.0
 
     return PaperAccountOut(
         id=account.id,
@@ -153,22 +169,106 @@ async def get_paper_account(current_user: User = Depends(get_current_user), db: 
         currency=account.currency,
         balance=float(account.balance),
         starting_balance=float(account.starting_balance),
-        total_pnl=total_pnl,
-        total_pnl_percent=total_pnl_percent,
+        total_pnl=round(pnl, 2),
+        total_pnl_percent=round(pnl_percent, 2),
+        is_active=account.is_active,
+    )
+
+
+class PaperTradingTickRequest(BaseModel):
+    paper_account_id: Optional[str] = None
+
+
+@router.post("/tick")
+async def run_paper_tick(
+    payload: Optional[PaperTradingTickRequest] = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.database.repositories.strategy_repository import StrategyRepository
+    from app.schemas.strategy import StrategyGraph
+    from app.paper_trading.engine import run_paper_trading_tick
+
+    stmt = select(PaperAccount).where(PaperAccount.user_id == current_user.id, PaperAccount.is_active == True)
+    if payload and payload.paper_account_id:
+        stmt = stmt.where(PaperAccount.id == payload.paper_account_id)
+    res = await db.execute(stmt)
+    account = res.scalars().first()
+    if not account:
+        raise HTTPException(status_code=404, detail="No active paper account found")
+
+    if not account.strategy_id:
+        raise HTTPException(status_code=400, detail="Account has no associated strategy")
+
+    repo = StrategyRepository(db)
+    strategy = await repo.get(account.strategy_id)
+    if not strategy or not strategy.versions:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+
+    latest_version = max(strategy.versions, key=lambda v: v.version_number)
+    graph = StrategyGraph.model_validate(latest_version.graph_json)
+
+    result = await run_paper_trading_tick(
+        db=db,
+        account=account,
+        strategy_graph=graph,
+        symbol=account.symbol or "BTC/USDT",
+        timeframe=account.timeframe or "1h",
+    )
+    return result
+
+
+@router.get("/account", response_model=PaperAccountOut)
+async def get_paper_account(
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+) -> PaperAccountOut:
+    res = await db.execute(
+        select(PaperAccount).where(PaperAccount.user_id == current_user.id, PaperAccount.is_active == True)
+    )
+    account = res.scalars().first()
+    if not account:
+        res2 = await db.execute(
+            select(PaperAccount)
+            .where(PaperAccount.user_id == current_user.id)
+            .order_by(PaperAccount.created_at.desc())
+        )
+        account = res2.scalars().first()
+        if not account:
+            raise HTTPException(status_code=404, detail="No paper account found")
+
+    pnl = float(account.balance) - float(account.starting_balance)
+    pnl_percent = (pnl / float(account.starting_balance) * 100) if float(account.starting_balance) else 0.0
+
+    return PaperAccountOut(
+        id=account.id,
+        strategy_id=account.strategy_id,
+        currency=account.currency,
+        balance=float(account.balance),
+        starting_balance=float(account.starting_balance),
+        total_pnl=round(pnl, 2),
+        total_pnl_percent=round(pnl_percent, 2),
         is_active=account.is_active,
     )
 
 
 @router.get("/trades", response_model=list[PaperTradeOut])
-async def list_paper_trades(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)) -> list[PaperTradeOut]:
-    res = await db.execute(select(Trade).join(Order).where(Order.user_id == current_user.id))
+async def list_paper_trades(
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+) -> list[PaperTradeOut]:
+    res = await db.execute(
+        select(Trade)
+        .options(joinedload(Trade.order))
+        .join(Order)
+        .where(Order.user_id == current_user.id)
+        .order_by(Trade.executed_at.desc())
+    )
     trades = res.scalars().all()
     return [
         PaperTradeOut(
             id=t.id,
             symbol=t.order.symbol,
-            side=t.order.side,
-            status=t.order.status,
+            side=t.order.side.value if hasattr(t.order.side, "value") else str(t.order.side),
+            status=t.order.status.value if hasattr(t.order.status, "value") else str(t.order.status),
             quantity=float(t.executed_quantity),
             price=float(t.executed_price),
             pnl=float(t.pnl) if t.pnl is not None else None,

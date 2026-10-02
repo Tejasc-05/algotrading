@@ -1,22 +1,22 @@
 """Backtesting endpoints. Accepts a strategy, runs it against historical data,
 and returns standardized metrics (Sharpe, max drawdown, win rate, etc.)."""
 from datetime import datetime
-from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, status
+from sqlalchemy import select
+from sqlalchemy.orm import joinedload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_user, get_db
 from app.backtesting.backtrader_engine import run_backtrader_backtest
 from app.backtesting.vectorbt_engine import run_vectorbt_backtest
 from app.core.exceptions import AppError
-from app.database.models.enums import BacktestStatus
+from app.database.models.backtest import Backtest, BacktestResult
+from app.database.models.enums import BacktestEngine, BacktestStatus
+from app.database.models.user import User
 from app.schemas.backtest import BacktestRequest
 from app.schemas.backtest import BacktestResultOut
 from app.schemas.strategy import StrategyGraph
-
-if TYPE_CHECKING:
-    from app.database.models.user import User
 
 router = APIRouter(prefix="/backtest", tags=["backtest"])
 
@@ -77,7 +77,7 @@ async def run_backtest(
             slippage_pct=slippage_decimal,
         )
 
-    # Build response
+    # Build response objects
     equity_curve = [
         {"timestamp": ec["timestamp"], "value": float(ec["value"])}
         for ec in result["equity_curve"]
@@ -93,10 +93,62 @@ async def run_backtest(
         for th in result["trade_history"]
     ]
 
-    return BacktestResultOut(
-        id=f"bt_{datetime.now().strftime('%Y%m%d%H%M%S%f')}",
+    # Persist to database
+    bt = Backtest(
+        user_id=current_user.id,
+        strategy_version_id=version.id,
+        engine=BacktestEngine(payload.engine),
+        symbol=payload.symbol,
+        timeframe=payload.timeframe,
+        start_date=payload.start_date,
+        end_date=payload.end_date,
+        starting_capital=payload.starting_capital,
+        fees=payload.fees_pct,
+        slippage=payload.slippage_pct,
         status=BacktestStatus.COMPLETED,
-        metrics=result["metrics"],
+    )
+    db.add(bt)
+    await db.flush()
+
+    equity_curve_json = [
+        {
+            "timestamp": ec["timestamp"].isoformat() if isinstance(ec["timestamp"], datetime) else str(ec["timestamp"]),
+            "value": float(ec["value"]),
+        }
+        for ec in equity_curve
+    ]
+    trade_history_json = [
+        {
+            "timestamp": th["timestamp"].isoformat() if isinstance(th["timestamp"], datetime) else str(th["timestamp"]),
+            "side": th["side"],
+            "price": float(th["price"]),
+            "quantity": float(th["quantity"]),
+            "pnl": float(th["pnl"]) if th["pnl"] is not None else None,
+        }
+        for th in trade_history
+    ]
+
+    metrics_data = result["metrics"]
+    bt_res = BacktestResult(
+        backtest_id=bt.id,
+        total_return_pct=metrics_data["total_return_pct"],
+        net_profit=metrics_data["net_profit"],
+        win_rate_pct=metrics_data["win_rate_pct"],
+        num_trades=metrics_data["num_trades"],
+        max_drawdown_pct=metrics_data["max_drawdown_pct"],
+        sharpe_ratio=metrics_data.get("sharpe_ratio"),
+        profit_factor=metrics_data.get("profit_factor"),
+        final_portfolio_value=metrics_data["final_portfolio_value"],
+        equity_curve_json=equity_curve_json,
+        trade_history_json=trade_history_json,
+    )
+    db.add(bt_res)
+    await db.commit()
+
+    return BacktestResultOut(
+        id=bt.id,
+        status=bt.status,
+        metrics=metrics_data,
         equity_curve=equity_curve,
         trade_history=trade_history,
     )
@@ -104,11 +156,54 @@ async def run_backtest(
 
 @router.get("/{backtest_id}", response_model=BacktestResultOut)
 async def get_backtest(
-    backtest_id: str, current_user: "User"
+    backtest_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ) -> BacktestResultOut:
-    """Get backtest results by ID (MVP returns placeholder)."""
-    raise AppError(
-        code="NOT_IMPLEMENTED",
-        message="Backtest history not yet persisted - create a new backtest with POST",
-        status_code=501,
+    """Get backtest results by ID."""
+    stmt = (
+        select(Backtest)
+        .options(joinedload(Backtest.result))
+        .where(Backtest.id == backtest_id, Backtest.user_id == current_user.id)
+    )
+    res = await db.execute(stmt)
+    bt = res.scalars().first()
+    if not bt or not bt.result:
+        raise AppError(code="BACKTEST_NOT_FOUND", message="Backtest not found", status_code=404)
+
+    r = bt.result
+    equity_curve = [
+        {
+            "timestamp": datetime.fromisoformat(ec["timestamp"]) if isinstance(ec["timestamp"], str) else ec["timestamp"],
+            "value": float(ec["value"]),
+        }
+        for ec in r.equity_curve_json
+    ]
+    trade_history = [
+        {
+            "timestamp": datetime.fromisoformat(th["timestamp"]) if isinstance(th["timestamp"], str) else th["timestamp"],
+            "side": th["side"],
+            "price": float(th["price"]),
+            "quantity": float(th["quantity"]),
+            "pnl": float(th["pnl"]) if th["pnl"] is not None else None,
+        }
+        for th in r.trade_history_json
+    ]
+    metrics = {
+        "total_return_pct": float(r.total_return_pct),
+        "net_profit": float(r.net_profit),
+        "win_rate_pct": float(r.win_rate_pct),
+        "num_trades": int(r.num_trades),
+        "max_drawdown_pct": float(r.max_drawdown_pct),
+        "sharpe_ratio": float(r.sharpe_ratio) if r.sharpe_ratio is not None else None,
+        "profit_factor": float(r.profit_factor) if r.profit_factor is not None else None,
+        "final_portfolio_value": float(r.final_portfolio_value),
+    }
+
+    return BacktestResultOut(
+        id=bt.id,
+        status=bt.status,
+        metrics=metrics,
+        equity_curve=equity_curve,
+        trade_history=trade_history,
     )

@@ -20,7 +20,7 @@ class CCXTExchange(ExchangeInterface):
     live (not paper) execution."""
 
     def __init__(self, exchange_id: str, api_key: str | None = None, api_secret: str | None = None,
-                 passphrase: str | None = None, testnet: bool = True):
+                 passphrase: str | None = None, testnet: bool = False):
         self.exchange_id = exchange_id
         self._testnet = testnet
 
@@ -38,15 +38,14 @@ class CCXTExchange(ExchangeInterface):
             "secret": api_secret,
             "password": passphrase,
             "enableRateLimit": True,
+            "timeout": 15_000,
         }
-
-        if testnet and hasattr(exchange_class, "set_sandbox_mode"):
+        self._exchange = exchange_class(config)
+        if testnet:
             try:
-                exchange_class.set_sandbox_mode(True)
+                self._exchange.set_sandbox_mode(True)
             except Exception:
                 pass
-
-        self._exchange = exchange_class(config)
 
     @classmethod
     def from_connection(cls, connection) -> "CCXTExchange":

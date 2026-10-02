@@ -40,6 +40,36 @@ async def get_current_user(
     return user
 
 
+async def get_user_from_websocket(websocket: Request | any) -> User | None:
+    token = websocket.query_params.get("token")
+    if not token:
+        auth = websocket.headers.get("authorization")
+        if auth and auth.startswith("Bearer "):
+            token = auth.split(" ", 1)[1]
+    if not token:
+        protocols = websocket.headers.get("sec-websocket-protocol", "").split(",")
+        for p in protocols:
+            p = p.strip()
+            if len(p) > 20:
+                token = p
+                break
+    if not token:
+        return None
+    try:
+        payload = decode_access_token(token)
+    except TokenError:
+        return None
+    user_id = payload.get("sub")
+    if not user_id:
+        return None
+    from app.database.database import async_session_factory
+    async with async_session_factory() as db:
+        user = await UserRepository(db).get(user_id)
+        if user and user.is_active:
+            return user
+    return None
+
+
 class RateLimiter:
     """Redis fixed-window limiter. Usage:
     `Depends(RateLimiter("login"))` on a route.

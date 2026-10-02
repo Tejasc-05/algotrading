@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 class TickerOut(BaseModel):
     symbol: str
-    last_price: float
+    price: float
     bid: float | None
     ask: float | None
     high_24h: float | None

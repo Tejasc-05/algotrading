@@ -90,3 +90,9 @@ async def auth_headers(client: AsyncClient) -> dict[str, str]:
     )
     token = response.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
+
+
+@pytest_asyncio.fixture
+async def db_session() -> AsyncGenerator[AsyncSession, None]:
+    async with TestSessionLocal() as session:
+        yield session

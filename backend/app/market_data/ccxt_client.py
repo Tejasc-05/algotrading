@@ -30,5 +30,5 @@ def get_ccxt_client(exchange_id: str) -> CCXTExchange:
         exchange_id=exchange_id,
         api_key=api_key,
         api_secret=api_secret,
-        testnet=True,
+        testnet=False,
     )

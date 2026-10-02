@@ -1,26 +1,25 @@
-"""Portfolio aggregation endpoints. Real implementation (Phase 7+) returns
-user-level aggregated balances and P/L across all active paper accounts."""
 from __future__ import annotations
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from fastapi import APIRouter, Depends
+from sqlalchemy import select
+from sqlalchemy.orm import joinedload
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_user, get_db
 from app.core.exceptions import AppError
+from app.database.models.enums import OrderStatus
 from app.database.models.paper_trading import PaperAccount, Trade, Order
+from app.database.models.user import User
 from app.schemas.trading import PortfolioOut, PositionOut, PortfolioPerformanceOut
-
-if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import AsyncSession
-    from app.database.models.user import User
 
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
 
 
 @router.get("", response_model=PortfolioOut)
 async def get_portfolio(
-    current_user: User,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> PortfolioOut:
     """Get user's portfolio summary across all paper accounts."""
@@ -40,13 +39,14 @@ async def get_portfolio(
 
     for account in accounts:
         # Get all filled trades for this account
-        from sqlalchemy import select as sa_select
-
         trades_res = await db.execute(
-            select(Trade).join(Order).where(
+            select(Trade)
+            .options(joinedload(Trade.order))
+            .join(Order)
+            .where(
                 Order.user_id == current_user.id,
                 Order.paper_account_id == account.id,
-                Order.status == "filled",
+                Order.status == OrderStatus.FILLED,
             )
         )
         trades = trades_res.scalars().all()
@@ -54,7 +54,8 @@ async def get_portfolio(
         # Get position per symbol
         position_map: dict[str, dict[str, Any]] = {}
         for trade in trades:
-            side = trade.order.side
+            side_raw = trade.order.side
+            side = side_raw.value if hasattr(side_raw, "value") else str(side_raw)
             symbol = trade.order.symbol
             executed_qty = float(trade.executed_quantity)
             executed_price = float(trade.executed_price)
@@ -106,20 +107,19 @@ async def get_portfolio(
 
 @router.get("/performance", response_model=PortfolioPerformanceOut)
 async def get_portfolio_performance(
-    current_user: User,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> PortfolioPerformanceOut:
     """Get portfolio performance analytics."""
-    from sqlalchemy import select, func
-
     # Get all filled trades across all active accounts
-    from sqlalchemy import select as sa_select
-
     trades_res = await db.execute(
-        select(Trade).join(Order).where(
+        select(Trade)
+        .options(joinedload(Trade.order))
+        .join(Order)
+        .where(
             Order.user_id == current_user.id,
             Order.paper_account_id.isnot(None),
-            Order.status == "filled",
+            Order.status == OrderStatus.FILLED,
         )
     )
     trades = trades_res.scalars().all()

@@ -139,7 +139,7 @@ export function StrategyCanvas() {
       })
       setSavedStrategyId(result.id)
       markSaved()
-      setTestStatus((prev) => `Saved: ${result.name} (v${result.current_version})`)
+      setTestStatus(`Saved: ${result.name} (v${result.current_version})`)
     } catch (err: any) {
       setTestStatus(`Save failed: ${err.message}`)
     } finally {
@@ -151,7 +151,7 @@ export function StrategyCanvas() {
     setIsExecuting(true)
     setSignalOutput([])
     try {
-      let strategyId = savedStrategyId
+      let strategyId: string | null = savedStrategyId
 
       // If strategy not yet saved, create it first
       if (!strategyId) {
@@ -164,6 +164,10 @@ export function StrategyCanvas() {
         strategyId = created.id
         setSavedStrategyId(strategyId)
         markSaved()
+      }
+
+      if (!strategyId) {
+        throw new Error('Failed to create or find strategy')
       }
 
       // Execute the strategy

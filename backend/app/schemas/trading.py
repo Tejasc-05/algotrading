@@ -19,6 +19,8 @@ class PaperAccountOut(BaseModel):
     id: str
     strategy_id: str | None
     currency: str
+    symbol: str | None = None
+    timeframe: str | None = None
     balance: float
     starting_balance: float
     total_pnl: float

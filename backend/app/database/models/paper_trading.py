@@ -23,6 +23,8 @@ class PaperAccount(Base, TimestampMixin):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False, default="Paper Account")
     currency: Mapped[str] = mapped_column(String(16), nullable=False, default="USDT")
+    symbol: Mapped[str] = mapped_column(String(32), nullable=False, default="BTC/USDT")
+    timeframe: Mapped[str] = mapped_column(String(16), nullable=False, default="1h")
     starting_balance: Mapped[float] = mapped_column(Numeric(20, 8), nullable=False)
     balance: Mapped[float] = mapped_column(Numeric(20, 8), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

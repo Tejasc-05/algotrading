@@ -46,6 +46,9 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(api_router)
 
+    from app.websocket.manager import websocket_endpoint
+    app.add_api_websocket_route("/ws", websocket_endpoint)
+
     return app
 
 
