@@ -32,7 +32,8 @@ async def run_backtest(
 
     # Get strategy (validate ownership)
     repo = StrategyRepository(db)
-    strategy = await repo.get(payload.strategy_id)
+    # Fetch strategy with eager-loaded versions to avoid lazy-loading errors in async context
+    strategy = await repo.get_with_versions(payload.strategy_id)
     if strategy is None or strategy.user_id != current_user.id:
         raise AppError(code="STRATEGY_NOT_FOUND", message="Strategy not found", status_code=404)
 

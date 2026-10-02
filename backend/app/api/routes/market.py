@@ -40,7 +40,7 @@ async def get_ticker(
         last = df.iloc[-1]
         return TickerOut(
             symbol=symbol,
-            last_price=float(last.close),
+            price=float(last.close),
             bid=None,
             ask=None,
             high_24h=float(last.high),
@@ -55,13 +55,13 @@ async def get_ticker(
     )
 
 
-@router.get("/ohlcv", response_model=OHLCVResponse)
+@router.get("/ohlcv", response_model=list[OHLCVCandle])
 async def get_ohlcv(
     symbol: str = Query(..., examples=["BTC/USDT"]),
     timeframe: str = Query("1h", examples=["1h"]),
     limit: int = Query(100, le=1000),
     current_user: User = Depends(get_current_user),
-) -> OHLCVResponse:
+) -> list[OHLCVCandle]:
     df = await fetch_latest_ohlcv(symbol=symbol, timeframe=timeframe, limit=limit)
     if df is None or df.empty:
         raise AppError(
@@ -81,4 +81,4 @@ async def get_ohlcv(
         )
         for row in df.itertuples()
     ]
-    return OHLCVResponse(symbol=symbol, timeframe=timeframe, candles=candles)
+    return candles

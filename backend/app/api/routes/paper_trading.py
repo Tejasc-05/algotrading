@@ -201,7 +201,8 @@ async def run_paper_tick(
         raise HTTPException(status_code=400, detail="Account has no associated strategy")
 
     repo = StrategyRepository(db)
-    strategy = await repo.get(account.strategy_id)
+    # Use eager‑loading to include strategy versions and avoid lazy‑load errors in async context
+    strategy = await repo.get_with_versions(account.strategy_id)
     if not strategy or not strategy.versions:
         raise HTTPException(status_code=404, detail="Strategy not found")
 
