@@ -201,3 +201,16 @@ The backend is now production-ready for paper trading and strategy development. 
 ---  
 *Session completed: 2026-10-02*  
 *Ready for next session: All core functionality implemented and tested*
+
+## ✅ Smoke‑Test Verification (Manual)
+
+- **Authentication**: Register and login flow works end‑to‑end. JWT is issued, stored by the frontend, and correctly validated by all protected endpoints.
+- **User Isolation**: Multiple users can register; each only sees their own strategies, paper‑trading sessions and portfolio data. No demo or cross‑user data is exposed.
+- **Strategy Builder Integration**: The React Flow graph is successfully persisted via `POST /api/strategies` and the backend validates nodes/edges. Executing a strategy (`POST /api/strategies/{id}/execute`) returns real‑time signals against live market data.
+- **Paper‑Trading Engine**: Starting a paper‑trading session, creating simulated orders, and ticking the engine updates balances, positions and trade history without sending any real orders to an exchange.
+- **Front‑end Connectivity**: The React dev server (`http://localhost:5173`) communicates with the FastAPI backend (`http://localhost:8000`) without CORS issues. All API calls succeed and the UI reflects the latest state (balances, signals, trade list).
+- **Result**: All core user‑flows verified manually; the system is ready for further testing or production deployment (live‑trading remains disabled).
+
+---
+
+*The smoke‑test was performed on 2026‑10‑02. No failures were observed.*
